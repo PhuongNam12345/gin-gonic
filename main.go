@@ -21,15 +21,17 @@ import (
 var jwtKey = []byte("123")
 
 type Claims struct {
-	Email string `json:"username"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
 	jwt.StandardClaims
 }
 
-func createToken(email string) (string, error) {
+func createToken(email string, role string) (string, error) {
 	expirationTime := time.Now().Add(5 * time.Minute)
 
 	claims := &Claims{
 		Email: email,
+		Role:  role,
 		StandardClaims: jwt.StandardClaims{
 			ExpiresAt: expirationTime.Unix(),
 		},
@@ -41,32 +43,50 @@ func createToken(email string) (string, error) {
 	}
 	return tokenString, nil
 }
-func authMiddleware(c *gin.Context) {
-	tokenString := c.GetHeader("Authorization")
-	fmt.Println(tokenString)
-	fmt.Println(1)
-	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		c.Abort()
-		return
+
+func authMiddleware(name string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenString := c.GetHeader("Authorization")
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+		token, err := jwt.ParseWithClaims(strings.Split(tokenString, " ")[1], &Claims{}, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized token not good", "token": token})
+			c.Abort()
+			return
+		}
+		if token == nil {
+			return
+		}
+		claims, _ := token.Claims.(*Claims)
+		i := claims.Email
+		if name == i {
+			return
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "sai email"})
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
-	token, _ := jwt.ParseWithClaims(strings.Split(tokenString, "")[1], &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return jwtKey, nil
-	})
-	fmt.Println(token)
 
-	fmt.Println([]byte(jwtKey))
-	if token == nil {
-		return
-	}
-
-	claims, _ := token.Claims.(*Claims)
-
-	fmt.Println(claims)
-
-	c.Next()
+	// if i == pass {
+	// 	c.Next()
+	// 	return
+	// } else {
+	// 	c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized password is not"})
+	// 	c.Abort()
+	// 	return
+	// }\
 }
-
+func ss() {
+	authMiddleware("ss")
+}
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -104,7 +124,22 @@ func handleData(c *gin.Context) {
 	// Handle data request (can query MongoDB or any data source)
 	c.JSON(http.StatusOK, gin.H{"data": "This is protected data"})
 }
+func AuthMiddleware(role string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Kiểm tra quyền của người dùng từ token hoặc session
+		userRole := getUserRoleFromToken(c) // Hàm giả định để lấy quyền từ token
 
+		// So sánh quyền của người dùng với quyền được yêu cầu
+		if userRole != allowedRole {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
+			c.Abort() // Dừng xử lý tiếp theo của yêu cầu
+			return
+		}
+
+		// Nếu người dùng có quyền, cho phép yêu cầu tiếp theo được xử lý
+		c.Next()
+	}
+}
 func main() { // Dữ liệu để thêm vào MongoDB
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -142,41 +177,23 @@ func main() { // Dữ liệu để thêm vào MongoDB
 			c.JSON(http.StatusNotFound, gin.H{"message": "Đăng nhập không thành công"})
 			return
 		} else {
-			token, _ := createToken(loginData.Email)
-			//Create JSON WEB TOKEN
-			// expirationTime := time.Now().Add(5 * time.Minute)
-			// claims := &jwt.StandardClaims{
-			// 	ExpiresAt: expirationTime.Unix(),
-
-			// }
-			// token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-
-			// tokenString, _ := token.SignedString(jwtKey)
+			token, _ := createToken(loginData.Email, loginData.Password)
 			c.JSON(http.StatusOK, gin.H{"token": token})
-			// } else {
-			// 	//REPLACE MESSAGE WITH JWT
-			// 	c.JSON(http.StatusOK, gin.H{"message": "Đăng nhập thành công"})
 		}
 		authorized := r.Group("/api")
-		authorized.Use(authMiddleware)
+
+		authorized.Use(authMiddleware(loginData.Email))
 		{
 			authorized.GET("/data", handleData)
 		}
-
-		// if isValidUser(loginData.Email, loginData.Password) {
-		// c.JSON(http.StatusOK, gin.H{"message": "Đăng nhập thành công"})
-		// } else {
-		// c.JSON(http.StatusUnauthorized, gin.H{"error": "Thông tin đăng nhập không chính xác"})
-		// }
-		// Thêm khách hàng
 	})
-	r.POST("/addcustomer", func(c *gin.Context) {
+
+	r.POST("/addcustomer", authMiddleware("ss"), func(c *gin.Context) {
 		var customerData CustomerData
 		if err := c.ShouldBindJSON(&customerData); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "lỗi"})
 			return
 		}
-		// Lưu trữ dữ liệu khách hàng vào MongoDB
 		_, err := collection.InsertOne(context.TODO(), customerData)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -218,8 +235,8 @@ func main() { // Dữ liệu để thêm vào MongoDB
 	// json.NewEncoder(w).Encode(users)
 	r.GET("/showcustomer", func(c *gin.Context) {
 		query := c.DefaultQuery("q", "")
-		page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
-		pageSize, err := strconv.Atoi(c.DefaultQuery("pageSize", "5"))
+		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+		pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "5"))
 		cursor, err := collection.Find(
 			context.TODO(),
 			bson.M{"fullname": primitive.Regex{Pattern: query, Options: "i"}},
@@ -298,6 +315,7 @@ type CustomerData struct {
 	Email    string `bson:"email" `
 	Phone    string `bson:"phone" `
 	Address  string `bson:"address" `
+	Role     string `bson:"role" `
 }
 type Person struct {
 	Fullname string `json:"fullname"`
