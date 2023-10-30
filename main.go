@@ -15,8 +15,24 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"gopkg.in/gomail.v2"
 	"gopkg.in/mgo.v2/bson"
 )
+
+func sendVerificationEmail(email string) {
+	mailer := gomail.NewMessage()
+	mailer.SetHeader("From", "namdang020201@gmail.com")
+	mailer.SetHeader("To", email)
+	mailer.SetHeader("Subject", "Verify account")
+	mailer.SetBody("text/html", "Congratulations! You have successfully registered an account")
+	// Vui lòng click vào liên kết sau để xác nhận địa chỉ email của bạn: <a href='http://yourapp.com/verify?email="+email+"'>Xác nhận</a>
+
+	dialer := gomail.NewDialer("smtp.gmail.com", 587, "namdang020201@gmail.com", "fnqz ugrw pdzl tgcx")
+
+	if err := dialer.DialAndSend(mailer); err != nil {
+		panic("Error send email: " + err.Error())
+	}
+}
 
 var jwtKey = []byte("123")
 
@@ -28,7 +44,6 @@ type Claims struct {
 
 func createToken(email string, role string) (string, error) {
 	expirationTime := time.Now().Add(5 * time.Minute)
-
 	claims := &Claims{
 		Email: email,
 		Role:  role,
@@ -47,6 +62,7 @@ func createToken(email string, role string) (string, error) {
 func authMiddleware(name string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString := c.GetHeader("Authorization")
+		fmt.Println(tokenString)
 		if tokenString == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
@@ -64,14 +80,24 @@ func authMiddleware(name string) gin.HandlerFunc {
 			return
 		}
 		claims, _ := token.Claims.(*Claims)
-		i := claims.Email
-		if name == i {
-			return
+		i := claims.Role
+		fmt.Println(claims)
+		fmt.Println(i)
+		fmt.Println(name)
+		if strings.Contains(name, i) {
+			fmt.Println("Role access")
 		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "sai email"})
+			fmt.Println("Role denied")
 			c.Abort()
 			return
 		}
+		// if name == i {
+		// 	c.JSON(http.StatusOK, gin.H{"": "sss"})
+		// } else {
+		// 	c.JSON(http.StatusUnauthorized, gin.H{"error": "permission denied"})
+		// 	c.Abort()
+		// 	return
+		// }
 		c.Next()
 	}
 
@@ -84,9 +110,7 @@ func authMiddleware(name string) gin.HandlerFunc {
 	// 	return
 	// }\
 }
-func ss() {
-	authMiddleware("ss")
-}
+
 func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -101,7 +125,7 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
-var collection, collection_admin *mongo.Collection
+var collection *mongo.Collection
 
 func init() {
 	// Thiết lập thông tin kết nối MongoDB
@@ -116,7 +140,7 @@ func init() {
 	}
 	// Lấy collection trong MongoDB
 	collection = client.Database("DB-test").Collection("customer")
-	collection_admin = client.Database("DB-test").Collection("admin")
+	// collection_admin = client.Database("DB-test").Collection("admin")
 
 }
 
@@ -124,22 +148,23 @@ func handleData(c *gin.Context) {
 	// Handle data request (can query MongoDB or any data source)
 	c.JSON(http.StatusOK, gin.H{"data": "This is protected data"})
 }
-func AuthMiddleware(role string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Kiểm tra quyền của người dùng từ token hoặc session
-		userRole := getUserRoleFromToken(c) // Hàm giả định để lấy quyền từ token
 
-		// So sánh quyền của người dùng với quyền được yêu cầu
-		if userRole != allowedRole {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
-			c.Abort() // Dừng xử lý tiếp theo của yêu cầu
-			return
-		}
+// func AuthMiddleware(role string) gin.HandlerFunc {
+// 	return func(c *gin.Context) {
+// 		// Kiểm tra quyền của người dùng từ token hoặc session
+// 		userRole := getUserRoleFromToken(c) // Hàm giả định để lấy quyền từ token
 
-		// Nếu người dùng có quyền, cho phép yêu cầu tiếp theo được xử lý
-		c.Next()
-	}
-}
+// 		// So sánh quyền của người dùng với quyền được yêu cầu
+// 		if userRole != allowedRole {
+// 			c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})
+// 			c.Abort() // Dừng xử lý tiếp theo của yêu cầu
+// 			return
+// 		}
+
+//			// Nếu người dùng có quyền, cho phép yêu cầu tiếp theo được xử lý
+//			c.Next()
+//		}
+//	}
 func main() { // Dữ liệu để thêm vào MongoDB
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -148,37 +173,44 @@ func main() { // Dữ liệu để thêm vào MongoDB
 	r.Use(CORSMiddleware())
 	// Register
 	r.POST("/register", func(c *gin.Context) {
-		var person Person
+		var person CustomerData
+
 		if err := c.BindJSON(&person); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		// Lưu trữ dữ liệu người dùng vào MongoDB
-		_, err := collection_admin.InsertOne(context.TODO(), person)
+		_, err := collection.InsertOne(context.TODO(), person)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": "Đăng ký thành công"})
+		sendVerificationEmail(person.Email)
+		{
+			c.JSON(http.StatusOK, gin.H{"message": "Đăng ký thành công"})
+		}
 	})
 	// Login
 	r.POST("/login", func(c *gin.Context) {
 		var loginData struct {
 			Email    string `bson:"email" binding:"required"`
 			Password string `bson:"password" `
+			Role     string `bson:"role" `
 		}
 
 		if err := c.ShouldBindJSON(&loginData); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		err := collection_admin.FindOne(context.TODO(), bson.M{"email": loginData.Email, "password": loginData.Password}).Decode(&loginData)
+		err := collection.FindOne(context.TODO(), bson.M{"email": loginData.Email, "password": loginData.Password}).Decode(&loginData)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"message": "Đăng nhập không thành công"})
 			return
 		} else {
-			token, _ := createToken(loginData.Email, loginData.Password)
-			c.JSON(http.StatusOK, gin.H{"token": token})
+			token, _ := createToken(loginData.Email, loginData.Role)
+			c.JSON(http.StatusOK, gin.H{"token": token,
+				"role": loginData.Role,
+			})
 		}
 		authorized := r.Group("/api")
 
@@ -188,7 +220,7 @@ func main() { // Dữ liệu để thêm vào MongoDB
 		}
 	})
 
-	r.POST("/addcustomer", authMiddleware("ss"), func(c *gin.Context) {
+	r.POST("/addcustomer", authMiddleware("admin	"), func(c *gin.Context) {
 		var customerData CustomerData
 		if err := c.ShouldBindJSON(&customerData); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "lỗi"})
@@ -314,6 +346,7 @@ type CustomerData struct {
 	Fullname string `bson:"fullname"`
 	Email    string `bson:"email" `
 	Phone    string `bson:"phone" `
+	Password string `bson:"password"`
 	Address  string `bson:"address" `
 	Role     string `bson:"role" `
 }
